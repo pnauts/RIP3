@@ -461,7 +461,7 @@ public class CACMEval {
 			System.out.println("P@20: " + calculatePK(20, qr, docs));
 			System.out.println("Recall@10: " + calculateRK(10, qr, docs));
 			System.out.println("Recall@20: " + calculateRK(20, qr, docs));
-
+			System.out.println("Showing top " + top + " docs:");
 			System.out.println();
 
 			for (int i = 0; i < cut; i++) {
@@ -535,7 +535,6 @@ public class CACMEval {
 
 			System.out.println("QueryID :" + queryNumber);
 			System.out.println("Query Body :" + query);
-			System.out.println("Showing top " + top + " docs:");
 
 			if (queryNumber <= (relevances.size() + 1))
 				qr = relevances.get(queryNumber);
