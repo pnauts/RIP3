@@ -418,7 +418,7 @@ public class CACMEval {
 
 		IndexReader reader;
 		List<docElement> docs = new ArrayList<docElement>();
-		float sumP = 0;
+		float avgP = 0;
 
 		try {
 
@@ -461,13 +461,20 @@ public class CACMEval {
 			System.out.println("P@20: " + calculatePK(20, qr, docs));
 			System.out.println("Recall@10: " + calculateRK(10, qr, docs));
 			System.out.println("Recall@20: " + calculateRK(20, qr, docs));
-			System.out.println("Showing top " + top + " docs:");
-			System.out.println();
 
+			float sumP = 0;
+			
 			for (int i = 0; i < cut; i++) {
 				sumP += calculatePK(i + 1, qr, docs);
 			}
 
+			avgP = sumP / (float) cut;
+			
+			System.out.println("Average Precision at cut " + cut +": " + avgP);
+			System.out.println();
+			System.out.println("Showing top " + top + " docs:");
+			System.out.println();
+			
 			top = Math.min(top, collector.getTotalHits());
 			
 			for (int i = 0; i < top; i++) {
@@ -481,7 +488,7 @@ public class CACMEval {
 				else
 					System.out.println("	Top " + (i + 1) + " doc");
 
-				System.out.println("	Avg. Precision: " + calculatePK(i + 1, qr, docs));
+				System.out.println("	Precision at this doc: " + calculatePK(i + 1, qr, docs));
 
 				de.showFields(showFields);
 			}
@@ -492,7 +499,7 @@ public class CACMEval {
 			e.printStackTrace();
 		}
 
-		return sumP / (float) cut;
+		return avgP;
 	}
 
 	private static float calculateRK(int k, queryRelevance qr, List<docElement> docs) {
@@ -545,8 +552,8 @@ public class CACMEval {
 			System.out.println();
 
 		}
-
-		System.err.println("Mean average precision at cut " + cut + ": " + map / mapQueries.size());
+		
+		System.out.println("Mean average precision at cut " + cut + ": " + map / mapQueries.size());
 
 	}
 
