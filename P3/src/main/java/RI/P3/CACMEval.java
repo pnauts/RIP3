@@ -468,6 +468,8 @@ public class CACMEval {
 				sumP += calculatePK(i + 1, qr, docs);
 			}
 
+			top = Math.min(top, collector.getTotalHits());
+			
 			for (int i = 0; i < top; i++) {
 				docElement de = docs.get(i);
 
@@ -499,7 +501,7 @@ public class CACMEval {
 
 		for (int i = 0; i < k; i++) {
 
-			if (qr.getDocs().contains(docs.get(i).getI_docID()))
+			if (i<docs.size() && qr.getDocs().contains(docs.get(i).getI_docID()))
 				relevants++;
 		}
 
@@ -514,7 +516,7 @@ public class CACMEval {
 
 		for (int i = 0; i < k; i++) {
 
-			if (qr.getDocs().contains(docs.get(i).getI_docID()))
+			if (i < docs.size() && qr.getDocs().contains(docs.get(i).getI_docID()))
 				relevants++;
 		}
 		float rk = (relevants / k);
