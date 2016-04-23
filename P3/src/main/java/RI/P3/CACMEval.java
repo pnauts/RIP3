@@ -545,7 +545,7 @@ public class CACMEval {
 
 		}
 
-		System.err.println("Mean average precision: " + map / mapQueries.size());
+		System.err.println("Mean average precision at cut " + cut + ": " + map / mapQueries.size());
 
 	}
 
