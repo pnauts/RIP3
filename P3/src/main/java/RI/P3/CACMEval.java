@@ -2,6 +2,7 @@ package RI.P3;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,21 +16,38 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.document.Document;
+import org.apache.lucene.index.AtomicReader;
+import org.apache.lucene.index.CompositeReader;
 import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.DocsEnum;
+import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.SlowCompositeReaderWrapper;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.index.Terms;
+import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.flexible.standard.QueryParserUtil;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.TotalHitCountCollector;
 import org.apache.lucene.search.BooleanClause.Occur;
+import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.store.RAMDirectory;
 import org.apache.lucene.util.Version;
 
 public class CACMEval {
@@ -144,7 +162,7 @@ public class CACMEval {
 
 	}
 
-	public static class QueryData {
+	private static class QueryData {
 
 		private final String query;
 		private final String authors;
@@ -171,7 +189,7 @@ public class CACMEval {
 
 	}
 
-	public static class QueryParser {
+	private static class QueryParser {
 
 		public static List<List<String>> parseString(StringBuffer fileContent) {
 
@@ -346,9 +364,187 @@ public class CACMEval {
 		relevanceDir = relevanceDir + "\\index\\qrels.text";
 
 		List<queryRelevance> relevances = getRelevances(Paths.get(relevanceDir));
-
 		queryMap = getQueries(Paths.get(queryDir), minQuery, maxQuery);
-		doSearch(indexPath, queryMap, topLimit, fieldsProc, fieldsVisual, relevances, cutLimit);
+		
+		 doSearch(indexPath, queryMap, topLimit, fieldsProc, fieldsVisual,
+				 relevances, cutLimit);
+
+		rf1Query(indexPath, queryMap, fieldsProc, relevances, tq, td, ndr, cutLimit, topLimit, fieldsVisual);
+	}
+
+	public static void rf1Query(String indexPath, Map<Integer, QueryData> mapQueries,
+			List<String> procFields, List<queryRelevance> relevances, int tq, int td, int ndr, int cut, int top, List<String> showFields) {
+
+		float map = 0;
+		System.err.println("\n\n OPTIMIZED QUERIES:\n");
+		
+		for (Map.Entry<Integer, QueryData> entry : mapQueries.entrySet()) {
+
+			BooleanQuery booleanQuery = new BooleanQuery();
+			
+			int queryNumber = entry.getKey();
+			String query = entry.getValue().getQuery();
+			List<String> tokens = getQueryTokens(query);
+
+			List<Term> topByIdf = topIdfTerms(indexPath, tokens, procFields, tq);
+			List<String> relevants = topRelevantes(indexPath, queryNumber, query, ndr, relevances, procFields);
+			List<Term> topByTfIdf = topTfIdf(indexPath, relevants, td, procFields);
+
+			topByIdf.removeAll(topByTfIdf);
+			topByIdf.addAll(topByTfIdf);
+
+			for (Term t : topByIdf)
+				booleanQuery.add(new TermQuery(t), BooleanClause.Occur.SHOULD);
+			
+			System.out.println("QueryID: "+queryNumber);
+			System.out.println("Query content: " + booleanQuery);
+			map+=processQuery(indexPath,booleanQuery,procFields,showFields,top, relevances.get(queryNumber),cut);
+			
+			System.out.println();
+			System.out.println("Mean average precision at cut " + cut + ": " + map / mapQueries.size());
+		}
+	}
+
+	public static List<Term> topTfIdf(String indexPath, List<String> topDocs, int top, List<String> fields) {
+
+		IndexReader reader;
+		Map<Double, Term> termScore = new TreeMap<Double, Term>(Collections.reverseOrder());
+		List<Term> topTerms = new ArrayList<Term>();
+
+		try {
+			reader = DirectoryReader.open(FSDirectory.open(new File(indexPath)));
+
+			AtomicReader atomicReader = SlowCompositeReaderWrapper.wrap((CompositeReader) reader);
+			Fields allfields = atomicReader.fields();
+			for (String field : fields) {
+				Terms terms = allfields.terms(field);
+				TermsEnum termsEnum = terms.iterator(null);
+				String nombre = null;
+
+				if (termsEnum.term() != null)
+					termsEnum.term().utf8ToString();
+
+				int numDocs = reader.numDocs();
+
+				while (termsEnum.next() != null) {
+					nombre = termsEnum.term().utf8ToString();
+					long docFreq = termsEnum.docFreq();
+					double idf = Math.log(numDocs / docFreq);
+
+					DocsEnum docsEnum = termsEnum.docs(null, null);
+					while (docsEnum.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+						String id = Integer.toString(docsEnum.docID());
+						long termFreq = docsEnum.freq();
+						double tfidf = 0;
+
+						if (topDocs.contains(id)) {
+							Term term = new Term(field, nombre);
+							tfidf = idf * (1 + Math.log(termFreq));
+							termScore.put(tfidf, term);
+						}
+					}
+				}
+
+			}
+
+			for (Map.Entry<Double, Term> entry : termScore.entrySet()) {
+
+				if (top == 0)
+					break;
+				topTerms.add(entry.getValue());
+				top--;
+			}
+
+			reader.close();
+			atomicReader.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		return topTerms;
+	}
+
+	public static List<String> topRelevantes(String indexPath, int queryNumber, String query, int top,
+			List<queryRelevance> relevances, List<String> procFields) {
+
+		Directory directory = new RAMDirectory();
+		IndexReader reader;
+		List<String> docsRel = relevances.get(queryNumber).getDocs();
+		List<String> topDocs = new ArrayList<String>();
+
+		try {
+
+			reader = DirectoryReader.open(FSDirectory.open(new File(indexPath)));
+			IndexSearcher searcher = new IndexSearcher(reader);
+
+			Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_40);
+
+			query = QueryParserUtil.escape(query);
+
+			String[] arrayQuery = new String[procFields.size()];
+			String[] arrayField = new String[procFields.size()];
+			Occur[] arrayClauses = new Occur[procFields.size()];
+
+			for (int i = 0; i < procFields.size(); i++) {
+
+				arrayQuery[i] = query;
+				arrayField[i] = procFields.get(i);
+				arrayClauses[i] = BooleanClause.Occur.SHOULD;
+			}
+
+			BooleanQuery booleanQuery = (BooleanQuery) MultiFieldQueryParser.parse(arrayQuery, arrayField, arrayClauses,
+					analyzer);
+
+			TotalHitCountCollector collector = new TotalHitCountCollector();
+			searcher.search(booleanQuery, collector);
+			TopDocs results = searcher.search(booleanQuery, collector.getTotalHits());
+			ScoreDoc[] hits = results.scoreDocs;
+
+			for (int i = 0; i < collector.getTotalHits(); i++) {
+
+				Document doc = searcher.doc(hits[i].doc);
+
+				if (top == 0)
+					break;
+
+				if (docsRel.contains(doc.get("docid"))) {
+					topDocs.add(doc.get("docid"));
+					top--;
+				}
+			}
+
+		} catch (IOException e) {
+			e.printStackTrace();
+		} catch (ParseException e) {
+			e.printStackTrace();
+		}
+
+		return topDocs;
+	}
+
+	public static List<String> getQueryTokens(String query) {
+
+		List<String> tokens = new ArrayList<String>();
+		TokenStream ts = null;
+		Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_40);
+
+		try {
+
+			ts = analyzer.tokenStream("", new StringReader(query));
+			ts.reset();
+
+			while (ts.incrementToken())
+				if (!tokens.contains(ts.getAttribute(CharTermAttribute.class).toString()))
+					tokens.add(ts.getAttribute(CharTermAttribute.class).toString());
+
+			ts.close();
+			analyzer.close();
+
+		} catch (
+
+		IOException e) {
+			e.printStackTrace();
+		}
+		return tokens;
 	}
 
 	public static List<queryRelevance> getRelevances(Path file) {
@@ -413,7 +609,7 @@ public class CACMEval {
 		return map;
 	}
 
-	public static float processQuery(String indexPath, String query, List<String> procFields, List<String> showFields,
+	public static float processQuery(String indexPath, Query query, List<String> procFields, List<String> showFields,
 			int top, queryRelevance qr, int cut) {
 
 		IndexReader reader;
@@ -426,25 +622,9 @@ public class CACMEval {
 			IndexSearcher searcher = new IndexSearcher(reader);
 			Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_40);
 
-			String[] arrayQuery = new String[procFields.size()];
-			String[] arrayField = new String[procFields.size()];
-			Occur[] arrayClauses = new Occur[procFields.size()];
-
-			query = QueryParserUtil.escape(query);
-
-			for (int i = 0; i < procFields.size(); i++) {
-
-				arrayQuery[i] = query;
-				arrayField[i] = procFields.get(i);
-				arrayClauses[i] = BooleanClause.Occur.SHOULD;
-			}
-
-			BooleanQuery booleanQuery = (BooleanQuery) MultiFieldQueryParser.parse(arrayQuery, arrayField, arrayClauses,
-					analyzer);
-
 			TotalHitCountCollector collector = new TotalHitCountCollector();
-			searcher.search(booleanQuery, collector);
-			TopDocs results = searcher.search(booleanQuery, collector.getTotalHits());
+			searcher.search(query, collector);
+			TopDocs results = searcher.search(query, collector.getTotalHits());
 			ScoreDoc[] hits = results.scoreDocs;
 
 			for (int i = 0; i < collector.getTotalHits(); i++) {
@@ -463,20 +643,20 @@ public class CACMEval {
 			System.out.println("Recall@20: " + calculateRK(20, qr, docs));
 
 			float sumP = 0;
-			
+
 			for (int i = 0; i < cut; i++) {
 				sumP += calculatePK(i + 1, qr, docs);
 			}
 
 			avgP = sumP / (float) cut;
-			
-			System.out.println("Average Precision at cut " + cut +": " + avgP);
+
+			System.out.println("Average Precision at cut " + cut + ": " + avgP);
 			System.out.println();
 			System.out.println("Showing top " + top + " docs:");
 			System.out.println();
-			
+
 			top = Math.min(top, collector.getTotalHits());
-			
+
 			for (int i = 0; i < top; i++) {
 				docElement de = docs.get(i);
 
@@ -495,8 +675,6 @@ public class CACMEval {
 
 		} catch (IOException e) {
 			e.printStackTrace();
-		} catch (ParseException e) {
-			e.printStackTrace();
 		}
 
 		return avgP;
@@ -508,7 +686,7 @@ public class CACMEval {
 
 		for (int i = 0; i < k; i++) {
 
-			if (i<docs.size() && qr.getDocs().contains(docs.get(i).getI_docID()))
+			if (i < docs.size() && qr.getDocs().contains(docs.get(i).getI_docID()))
 				relevants++;
 		}
 
@@ -548,13 +726,84 @@ public class CACMEval {
 			if (queryNumber <= (relevances.size() + 1))
 				qr = relevances.get(queryNumber);
 
-			map += processQuery(indexPath, query, procFields, showFields, top, qr, cut);
-			System.out.println();
+			query = QueryParserUtil.escape(query);
+			Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_40);
+			try {
+				String[] arrayQuery = new String[procFields.size()];
+				String[] arrayField = new String[procFields.size()];
+				Occur[] arrayClauses = new Occur[procFields.size()];
 
+				for (int i = 0; i < procFields.size(); i++) {
+
+					arrayQuery[i] = query;
+					arrayField[i] = procFields.get(i);
+					arrayClauses[i] = BooleanClause.Occur.SHOULD;
+				}
+				
+				BooleanQuery booleanQuery = (BooleanQuery) MultiFieldQueryParser.parse(arrayQuery, arrayField,
+						arrayClauses, analyzer);
+
+				map += processQuery(indexPath, booleanQuery, procFields, showFields, top, qr, cut);
+				System.out.println();
+				System.out.println("Mean average precision at cut " + cut + ": " + map / mapQueries.size());
+			} catch (ParseException e) {
+				e.printStackTrace();
+			}
 		}
-		
-		System.out.println("Mean average precision at cut " + cut + ": " + map / mapQueries.size());
 
 	}
 
+	public static List<Term> topIdfTerms(String index, List<String> tokens, List<String> fields, int ndr) {
+
+		IndexReader reader;
+		List<Term> topTerms = new ArrayList<Term>();
+		Map<Double, Term> termScore = new TreeMap<Double, Term>(Collections.reverseOrder());
+
+		try {
+			reader = DirectoryReader.open(FSDirectory.open(new File(index)));
+
+			AtomicReader atomicReader = SlowCompositeReaderWrapper.wrap((CompositeReader) reader);
+			Fields allfields = atomicReader.fields();
+
+			for (String field : fields) {
+
+				Terms terms = allfields.terms(field);
+				TermsEnum termsEnum = terms.iterator(null);
+				String nombre = null;
+
+				if (termsEnum.term() != null)
+					termsEnum.term().utf8ToString();
+
+				int numDocs = reader.numDocs();
+
+				while (termsEnum.next() != null) {
+					nombre = termsEnum.term().utf8ToString();
+
+					if (!tokens.contains(nombre))
+						continue;
+
+					long docFreq = termsEnum.docFreq();
+					double idf = Math.log(numDocs / docFreq);
+					Term term = new Term(field, nombre);
+					termScore.put(idf, term);
+				}
+			}
+
+			reader.close();
+			atomicReader.close();
+
+			for (Map.Entry<Double, Term> entry : termScore.entrySet()) {
+
+				if (ndr == 0)
+					break;
+
+				topTerms.add(entry.getValue());
+				ndr--;
+			}
+
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		return topTerms;
+	}
 }
