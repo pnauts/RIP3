@@ -358,20 +358,106 @@ public class CACMEval {
 		}
 
 		String queryDir = System.getProperty("user.dir");
-		queryDir = queryDir + "\\index\\query.text";
+		queryDir = queryDir + "/index/query.text";
 
 		String relevanceDir = System.getProperty("user.dir");
-		relevanceDir = relevanceDir + "\\index\\qrels.text";
+		relevanceDir = relevanceDir + "/index/qrels.text";
 
 		List<queryRelevance> relevances = getRelevances(Paths.get(relevanceDir));
 		queryMap = getQueries(Paths.get(queryDir), minQuery, maxQuery);
 		
 		 doSearch(indexPath, queryMap, topLimit, fieldsProc, fieldsVisual,
 				 relevances, cutLimit);
-
-		rf1Query(indexPath, queryMap, fieldsProc, relevances, tq, td, ndr, cutLimit, topLimit, fieldsVisual);
+		 if(evMode == 1){			 
+			 rf1Query(indexPath, queryMap, fieldsProc, relevances, tq, td, ndr, cutLimit, topLimit, fieldsVisual);
+		 }
+		 if(evMode == 2){			 
+			 rf2Query(indexPath, queryMap, fieldsProc, relevances, ndr, cutLimit, topLimit, fieldsVisual);
+		 }
+		 if(evMode == 3){			 
+			 rf3Query(indexPath, queryMap, fieldsProc, relevances, ndr, cutLimit, topLimit, fieldsVisual);
+		 }
 	}
+		 
 
+	public static void rf2Query(String indexPath,Map<Integer,QueryData> mapQueries,
+			List<String> procFields, List<queryRelevance> relevances, int ndr, int cut, int top, List<String> showFields){
+		
+		float map = 0;
+		System.err.println("\n\n OPTIMIZED QUERIES:\n");
+		for (Map.Entry<Integer, QueryData> entry : mapQueries.entrySet()) {
+			int queryNumber = entry.getKey();
+			String origQuery = entry.getValue().getQuery();
+			List<String> relevants = topRelevantes(indexPath, queryNumber, origQuery, ndr, relevances, procFields);
+			String newQuery = newQueryFromDocs(indexPath,relevants,"title");
+			String query = origQuery + " " + newQuery;
+			query=QueryParserUtil.escape(query);
+			Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_40);
+			try {
+				String[] arrayQuery = new String[procFields.size()];
+				String[] arrayField = new String[procFields.size()];
+				Occur[] arrayClauses = new Occur[procFields.size()];
+	
+				for (int i = 0; i < procFields.size(); i++) {
+	
+					arrayQuery[i] = query;
+					arrayField[i] = procFields.get(i);
+					arrayClauses[i] = BooleanClause.Occur.SHOULD;
+				}
+				BooleanQuery booleanQuery = (BooleanQuery) MultiFieldQueryParser.parse(arrayQuery, arrayField,
+						arrayClauses, analyzer);
+				System.out.println("QueryID: "+queryNumber);
+				System.out.println("Query content: " + booleanQuery);
+				map+=processQuery(indexPath,booleanQuery,procFields,showFields,top, relevances.get(queryNumber),cut);
+				
+				System.out.println();
+				System.out.println("Mean average precision at cut " + cut + ": " + map / mapQueries.size());
+			}catch(Exception e)
+			{
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	public static void rf3Query(String indexPath,Map<Integer,QueryData> mapQueries,
+			List<String> procFields, List<queryRelevance> relevances, int ndr, int cut, int top, List<String> showFields){
+		
+		float map = 0;
+		System.err.println("\n\n OPTIMIZED QUERIES:\n");
+		for (Map.Entry<Integer, QueryData> entry : mapQueries.entrySet()) {
+			int queryNumber = entry.getKey();
+			String origQuery = entry.getValue().getQuery();
+			List<String> relevants = topRelevantes(indexPath, queryNumber, origQuery, ndr, relevances, procFields);
+			String newQuery = newQueryFromDocs(indexPath,relevants,"abstract");
+			String query = origQuery + " " + newQuery;
+			query=QueryParserUtil.escape(query);
+			Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_40);
+			try {
+				String[] arrayQuery = new String[procFields.size()];
+				String[] arrayField = new String[procFields.size()];
+				Occur[] arrayClauses = new Occur[procFields.size()];
+	
+				for (int i = 0; i < procFields.size(); i++) {
+	
+					arrayQuery[i] = query;
+					arrayField[i] = procFields.get(i);
+					arrayClauses[i] = BooleanClause.Occur.SHOULD;
+				}
+				BooleanQuery booleanQuery = (BooleanQuery) MultiFieldQueryParser.parse(arrayQuery, arrayField,
+						arrayClauses, analyzer);
+				System.out.println("QueryID: "+queryNumber);
+				System.out.println("Query content: " + booleanQuery);
+				map+=processQuery(indexPath,booleanQuery,procFields,showFields,top, relevances.get(queryNumber),cut);
+				
+				System.out.println();
+				System.out.println("Mean average precision at cut " + cut + ": " + map / mapQueries.size());
+			}catch(Exception e)
+			{
+				e.printStackTrace();
+			}
+		}
+	}	
+	
 	public static void rf1Query(String indexPath, Map<Integer, QueryData> mapQueries,
 			List<String> procFields, List<queryRelevance> relevances, int tq, int td, int ndr, int cut, int top, List<String> showFields) {
 
@@ -406,6 +492,7 @@ public class CACMEval {
 	}
 
 	public static List<Term> topTfIdf(String indexPath, List<String> topDocs, int top, List<String> fields) {
+
 
 		IndexReader reader;
 		Map<Double, Term> termScore = new TreeMap<Double, Term>(Collections.reverseOrder());
@@ -463,6 +550,28 @@ public class CACMEval {
 		return topTerms;
 	}
 
+	public static String newQueryFromDocs(String indexPath, List<String> topDocs, String field) {
+
+		IndexReader reader;
+		Map<Double, Term> termScore = new TreeMap<Double, Term>(Collections.reverseOrder());
+		String NewQuery = new String();
+		try {
+			reader = DirectoryReader.open(FSDirectory.open(new File(indexPath)));
+			AtomicReader atomicReader = SlowCompositeReaderWrapper.wrap((CompositeReader) reader);
+			int numDocs = reader.numDocs();
+			for(int i=0;i<numDocs;i++){
+				if (topDocs.contains(reader.document(i).get("docid"))) 
+					NewQuery=NewQuery.concat(reader.document(i).get(field));
+			}			
+			reader.close();
+			atomicReader.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		System.out.println("NewQuery :  " + NewQuery);
+		return NewQuery;
+	}
+	
 	public static List<String> topRelevantes(String indexPath, int queryNumber, String query, int top,
 			List<queryRelevance> relevances, List<String> procFields) {
 
@@ -807,3 +916,5 @@ public class CACMEval {
 		return topTerms;
 	}
 }
+
+	
